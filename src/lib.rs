@@ -20,3 +20,5 @@ pub use stack::{Stack, StackBuilder};
 
 /// Re-export
 pub use smoltcp;
+
+pub mod utils;

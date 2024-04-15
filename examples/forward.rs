@@ -1,7 +1,10 @@
 use std::net::{IpAddr, SocketAddr};
 
 use futures::{SinkExt, StreamExt};
-use netstack_smoltcp::{StackBuilder, TcpListener, UdpSocket};
+use netstack_smoltcp::{
+    utils::{add_route, get_default_if_name, init_default_interface},
+    StackBuilder, TcpListener, UdpSocket,
+};
 use structopt::StructOpt;
 use tokio::net::{TcpSocket, TcpStream};
 use tracing::{error, info, warn};
@@ -38,7 +41,7 @@ struct Opt {
     /// Default binding interface, default by guessed.
     /// Specify but doesn't exist, no device is bound.
     #[structopt(short = "i", long = "interface")]
-    interface: String,
+    interface: Option<String>,
 
     /// Tracing subscriber log level.
     #[structopt(long = "log-level", default_value = "debug")]
@@ -89,12 +92,16 @@ async fn main_exec(opt: Opt) {
     let mut cfg = tun::Configuration::default();
     cfg.layer(tun::Layer::L3);
     let fd = -1;
+    let dst = "10.10.10.1";
+    let addr = "10.10.10.1";
+    let netmask = "255.255.255.0";
+    let name = "utun20";
     if fd >= 0 {
         cfg.raw_fd(fd);
     } else {
-        cfg.tun_name("utun8")
-            .address("10.10.10.2")
-            .destination("10.10.10.1")
+        cfg.tun_name(name)
+            .address(addr)
+            .destination(dst)
             .mtu(tun::DEFAULT_MTU);
         #[cfg(not(any(
             target_arch = "mips",
@@ -103,7 +110,7 @@ async fn main_exec(opt: Opt) {
             target_arch = "mipsel64",
         )))]
         {
-            cfg.netmask("255.255.255.0");
+            cfg.netmask(netmask);
         }
         cfg.up();
     }
@@ -115,6 +122,8 @@ async fn main_exec(opt: Opt) {
             // .add_ip_filter(Box::new(move |src, dst| *src != device_broadcast && *dst != device_broadcast));
             .add_ip_filter_fn(move |src, dst| *src != device_broadcast && *dst != device_broadcast);
     }
+
+    add_route(addr.parse().unwrap()).await.unwrap();
 
     let (runner, udp_socket, tcp_listener, stack) = builder.build();
     tokio_spawn!(runner);
@@ -149,9 +158,13 @@ async fn main_exec(opt: Opt) {
         }
     }));
 
+    init_default_interface(net_route::Handle::new().unwrap()).await.unwrap();
+    let interface = opt.interface.unwrap_or(get_default_if_name().unwrap());
+    info!("using interface: {}", &interface);
+
     // Extracts TCP connections from stack and sends them to the dispatcher.
     futs.push(tokio_spawn!({
-        let interface = opt.interface.clone();
+        let interface = interface.clone();
         async move {
             handle_inbound_stream(tcp_listener, interface).await;
         }
@@ -160,7 +173,7 @@ async fn main_exec(opt: Opt) {
     // Receive and send UDP packets between netstack and NAT manager. The NAT
     // manager would maintain UDP sessions and send them to the dispatcher.
     futs.push(tokio_spawn!(async move {
-        handle_inbound_datagram(udp_socket, opt.interface).await;
+        handle_inbound_datagram(udp_socket, interface).await;
     }));
 
     futures::future::join_all(futs)
