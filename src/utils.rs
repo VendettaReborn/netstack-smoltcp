@@ -12,18 +12,35 @@ use tracing::{debug, warn};
 pub struct Opt {
     addrs: Vec<(IpAddr, u8)>,
     #[cfg(target_os = "linux")]
-    pub table: u8,
+    pub table: u32,
 }
 
+// eq: from all lookup `opt.table`
 #[cfg(target_os = "linux")]
-pub fn build_rules(opt: &Opt) {}
+pub async fn add_rules(opt: &Opt) -> io::Result<()> {
+    let handle = Handle::new()?;
 
-#[allow(unreachable_code)]
-pub fn build_routes(gateway: IpAddr, opt: Opt) -> Vec<Route> {
+    // will lookup the table main fristly, and ignore the default route(with prefix of 0) in it
+    let mut rule1 = net_route::Rule::default();
+    rule1.suppress_prefixlength = Some(0);
+    rule1.table_id = Some(254);
+    rule1.priority = Some(7000);
+
+    // will lookup the route table, which has only one route to the tun device
+    let mut rule2 = net_route::Rule::default();
+    rule2.table_id = Some(opt.table);
+    rule2.priority = Some(7001);
+
+    handle.add_rules(vec![rule1, rule2]).await
+}
+
+#[allow(unreachable_code, unused_variables)]
+pub fn build_routes(gateway: IpAddr, opt: &Opt) -> Vec<Route> {
     if !opt.addrs.is_empty() {
         return opt
             .addrs
-            .into_iter()
+            .iter()
+            .cloned()
             .map(|(dst, prefix)| Route::new(dst, prefix))
             .collect::<Vec<_>>();
     }
@@ -45,13 +62,15 @@ pub fn build_routes(gateway: IpAddr, opt: Opt) -> Vec<Route> {
 
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
+        let if_index = get_if_index("utun20");
+        println!("if index of utun20: {}", if_index);
         return [
-            Route::new(Ipv4Addr::UNSPECIFIED.into(), 1)
-                .with_gateway(gateway)
+            Route::new(Ipv4Addr::UNSPECIFIED.into(), 0)
+                .with_ifindex(if_index)
                 .with_table(opt.table),
-            Route::new("128.0.0.0".parse().unwrap(), 1)
-                .with_gateway(gateway)
-                .with_table(opt.table),
+            // Route::new("128.0.0.0".parse().unwrap(), 1)
+            //     .with_ifindex(if_index)
+            //     .with_table(opt.table),
         ]
         .into();
     }
@@ -63,9 +82,9 @@ pub fn build_routes(gateway: IpAddr, opt: Opt) -> Vec<Route> {
     .into();
 }
 
-pub async fn add_route(gateway: IpAddr) -> io::Result<()> {
+pub async fn add_route(gateway: IpAddr, opt: &Opt) -> io::Result<()> {
     let handle = Handle::new()?;
-    let routes = build_routes(gateway, Opt { addrs: vec![] });
+    let routes = build_routes(gateway, opt);
 
     for route in routes {
         const MAX_RETRY: usize = 3;
@@ -88,23 +107,47 @@ pub async fn add_route(gateway: IpAddr) -> io::Result<()> {
 
 pub static DEFAULT_IF_INDEX: AtomicU32 = AtomicU32::new(0);
 
-pub async fn init_default_interface(handle: Handle) -> io::Result<()> {
-    let default_idx = handle.default_route().await?.unwrap().ifindex;
-    DEFAULT_IF_INDEX.store(
-        default_idx.unwrap_or_default(),
-        std::sync::atomic::Ordering::SeqCst,
-    );
-    Ok(())
+// #[cfg(not(target_os = "linux"))]
+async fn get_default_interface_exclude_self(
+    handle: &Handle,
+    this: Option<u32>,
+) -> io::Result<Option<Route>> {
+    for route in handle.list().await? {
+        if (route.destination == Ipv4Addr::UNSPECIFIED
+            || route.destination == std::net::Ipv6Addr::UNSPECIFIED)
+            && route.prefix == 0
+            && route.gateway != Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+            && route.gateway != Some(IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED))
+            && (this.is_none() || route.ifindex != this)
+        {
+            return Ok(Some(route));
+        }
+    }
+    Ok(None)
 }
 
-pub async fn monitor_default_interface(handle: Handle) -> io::Result<()> {
+// this_if: the interface index of the current tun interface, which should be excluded
+pub async fn init_default_interface(handle: Handle, this_if: Option<u32>) -> io::Result<()> {
+    let default_if = get_default_interface_exclude_self(&handle, this_if).await?;
+    if let Some(default_if) = default_if {
+        DEFAULT_IF_INDEX.store(
+            default_if.ifindex.unwrap_or_default(),
+            std::sync::atomic::Ordering::SeqCst,
+        );
+        Ok(())
+    } else {
+        Err(std::io::Error::other("no default interface"))
+    }
+}
+
+pub async fn monitor_default_interface(handle: Handle, this_if: Option<u32>) -> io::Result<()> {
     let stream = handle.route_listen_stream();
     futures::pin_mut!(stream);
 
     println!("Listening for route events, press Ctrl+C to cancel...");
     while let Some(event) = stream.next().await {
         println!("event:{:?}", event);
-        if let Some(route) = handle.default_route().await? {
+        if let Some(route) = get_default_interface_exclude_self(&handle, this_if).await? {
             println!("Default route:\n{:?}", route);
             DEFAULT_IF_INDEX.store(
                 route.ifindex.unwrap_or_default(),
@@ -115,6 +158,19 @@ pub async fn monitor_default_interface(handle: Handle) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+pub fn get_if_index(name: &str) -> u32 {
+    let c_str = std::ffi::CString::new(name).unwrap();
+    // Safety: This function is unsafe because it deals with raw pointers and can cause undefined behavior if used incorrectly.
+    unsafe {
+        if libc::if_nametoindex(c_str.as_ptr()) == 0 {
+            warn!("No interface found for name {}", name);
+            0
+        } else {
+            libc::if_nametoindex(c_str.as_ptr())
+        }
+    }
 }
 
 pub fn get_default_if_name() -> Option<String> {
@@ -139,8 +195,21 @@ pub fn get_default_if_name() -> Option<String> {
 async fn t1() -> io::Result<()> {
     let handle = Handle::new()?;
 
-    init_default_interface(handle).await?;
+    init_default_interface(handle, None).await?;
     let if_name = get_default_if_name();
     println!("default if name: {:?}", if_name);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn t2() -> io::Result<()> {
+    add_rules(&Opt {
+        table: 1989,
+        ..Default::default()
+    })
+    .await?;
+
+    // println!("default if name: {:?}",);
     Ok(())
 }

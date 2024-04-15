@@ -2,7 +2,7 @@ use std::net::{IpAddr, SocketAddr};
 
 use futures::{SinkExt, StreamExt};
 use netstack_smoltcp::{
-    utils::{add_route, get_default_if_name, init_default_interface},
+    utils::{add_route, add_rules, get_default_if_name, get_if_index, init_default_interface},
     StackBuilder, TcpListener, UdpSocket,
 };
 use structopt::StructOpt;
@@ -115,6 +115,17 @@ async fn main_exec(opt: Opt) {
         cfg.up();
     }
 
+    // the tun device is not handled yet
+    init_default_interface(net_route::Handle::new().unwrap(), None)
+        .await
+        .unwrap();
+    let interface = opt.interface.unwrap_or(get_default_if_name().unwrap());
+    info!(
+        "using interface: {}, default if: {:?}",
+        &interface,
+        get_default_if_name()
+    );
+
     let device = tun::create_as_async(&cfg).unwrap();
     let mut builder = StackBuilder::default();
     if let Some(device_broadcast) = get_device_broadcast(&device) {
@@ -123,7 +134,28 @@ async fn main_exec(opt: Opt) {
             .add_ip_filter_fn(move |src, dst| *src != device_broadcast && *dst != device_broadcast);
     }
 
-    add_route(addr.parse().unwrap()).await.unwrap();
+    #[cfg(debug_assertions)]
+    {
+        let if_index = get_if_index(name);
+        // the tun device is not handled yet
+        init_default_interface(net_route::Handle::new().unwrap(), Some(if_index))
+            .await
+            .unwrap();
+        info!(
+            "re detect interface: {}, default if: {:?}",
+            &interface,
+            get_default_if_name()
+        );
+    }
+
+    let mut util_opt = netstack_smoltcp::utils::Opt::default();
+    #[cfg(target_os = "linux")]
+    {
+        util_opt.table = 1989;
+    }
+
+    add_rules(&util_opt).await.unwrap();
+    add_route(addr.parse().unwrap(), &util_opt).await.unwrap();
 
     let (runner, udp_socket, tcp_listener, stack) = builder.build();
     tokio_spawn!(runner);
@@ -157,10 +189,6 @@ async fn main_exec(opt: Opt) {
             }
         }
     }));
-
-    init_default_interface(net_route::Handle::new().unwrap()).await.unwrap();
-    let interface = opt.interface.unwrap_or(get_default_if_name().unwrap());
-    info!("using interface: {}", &interface);
 
     // Extracts TCP connections from stack and sends them to the dispatcher.
     futs.push(tokio_spawn!({

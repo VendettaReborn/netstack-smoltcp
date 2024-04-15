@@ -32,7 +32,7 @@ smoltcp = { version = "0.11", default-features = false, features = [
     "socket-udp",
     "socket-tcp",
 ] }
-net-route = { git = "https://github.com/VendettaReborn/net-route.git", rev = "ad76d09328e8459a765e7aa38cc5ae6df6f49b3d"}
+net-route = { git = "https://github.com/VendettaReborn/net-route.git", rev = "a215000025380fe00e786648c3040f49dab4ffc5"}
 libc = "0.2.153"
 
 [dev-dependencies]
