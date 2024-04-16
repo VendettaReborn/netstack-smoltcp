@@ -34,9 +34,14 @@ smoltcp = { version = "0.11", default-features = false, features = [
 ] }
 net-route = { git = "https://github.com/VendettaReborn/net-route.git", rev = "a215000025380fe00e786648c3040f49dab4ffc5"}
 libc = "0.2.153"
+socket2 = "0.5.6"
+bytes = "1.6.0"
+windows-sys = {version = "0.52",features = ["Win32_Foundation","Win32_NetworkManagement_IpHelper","Win32_NetworkManagement_Ndis","Win32_Networking_WinSock","Win32_System_IO"]}
+winapi = { version = "0.3"}
+ipconfig = {version = "0.3.2", path = "../ipconfig"}
 
 [dev-dependencies]
-tun = { package = "tun2", version = "1.0", features = ["async"] }
+tun = { git = "https://github.com/VendettaReborn/rust-tun.git" ,rev = "48b98ca4be012e8edfe45321e609bc2666fb79a8", package = "tun2", features = ["async"] }
 tokio = { version = "1", features = [
     "rt",
     "macros",

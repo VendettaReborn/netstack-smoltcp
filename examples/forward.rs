@@ -2,7 +2,8 @@ use std::net::{IpAddr, SocketAddr};
 
 use futures::{SinkExt, StreamExt};
 use netstack_smoltcp::{
-    utils::{add_route, add_rules, get_default_if_name, get_if_index, init_default_interface},
+    net::{get_default_if_name, get_if_index},
+    utils::{add_route, init_default_interface},
     StackBuilder, TcpListener, UdpSocket,
 };
 use structopt::StructOpt;
@@ -90,12 +91,16 @@ async fn main_exec(opt: Opt) {
     .unwrap();
 
     let mut cfg = tun::Configuration::default();
+    #[cfg(target_os = "windows")]
+    cfg.platform_config(|config| {
+        config.device_guid(Some(9099482345783245345345_u128));
+    });
     cfg.layer(tun::Layer::L3);
     let fd = -1;
-    let dst = "10.10.10.1";
-    let addr = "10.10.10.1";
+    let dst = "10.10.2.1";
+    let addr = "10.10.2.1";
     let netmask = "255.255.255.0";
-    let name = "utun20";
+    let name = "utun64";
     if fd >= 0 {
         cfg.raw_fd(fd);
     } else {
@@ -153,8 +158,14 @@ async fn main_exec(opt: Opt) {
     {
         util_opt.table = 1989;
     }
+    #[cfg(target_os = "windows")]
+    {
+        // util_opt.if_index = Some(get_if_index(name));
+        util_opt.luid = dbg!(device.as_ref().luid());
+    }
 
-    add_rules(&util_opt).await.unwrap();
+    #[cfg(target_os = "linux")]
+    netstack_smoltcp::utils::add_rules(&util_opt).await.unwrap();
     add_route(addr.parse().unwrap(), &util_opt).await.unwrap();
 
     let (runner, udp_socket, tcp_listener, stack) = builder.build();

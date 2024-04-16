@@ -13,6 +13,9 @@ pub struct Opt {
     addrs: Vec<(IpAddr, u8)>,
     #[cfg(target_os = "linux")]
     pub table: u32,
+    #[cfg(target_os = "windows")]
+    pub luid: Option<u64>,
+    pub if_index: Option<u32>,
 }
 
 // eq: from all lookup `opt.table`
@@ -75,6 +78,21 @@ pub fn build_routes(gateway: IpAddr, opt: &Opt) -> Vec<Route> {
         .into();
     }
 
+    #[cfg(target_os = "windows")]
+    {
+        let mut r1 = Route::new(Ipv4Addr::UNSPECIFIED.into(), 1)
+            .with_gateway(gateway)
+            .with_metric(0);
+        if let Some(luid) = opt.luid {
+            r1 = r1.with_luid(luid);
+        }
+        if let Some(if_index) = opt.if_index {
+            r1 = r1.with_ifindex(if_index);
+        }
+
+        return vec![r1];
+    }
+
     return [
         Route::new(Ipv4Addr::UNSPECIFIED.into(), 1).with_gateway(gateway),
         Route::new("128.0.0.0".parse().unwrap(), 1).with_gateway(gateway),
@@ -87,6 +105,7 @@ pub async fn add_route(gateway: IpAddr, opt: &Opt) -> io::Result<()> {
     let routes = build_routes(gateway, opt);
 
     for route in routes {
+        println!("adding route:{:?},", route);
         const MAX_RETRY: usize = 3;
         for _ in 0..MAX_RETRY {
             if let Err(e) = handle.add(&route).await {
@@ -160,44 +179,16 @@ pub async fn monitor_default_interface(handle: Handle, this_if: Option<u32>) -> 
     Ok(())
 }
 
-pub fn get_if_index(name: &str) -> u32 {
-    let c_str = std::ffi::CString::new(name).unwrap();
-    // Safety: This function is unsafe because it deals with raw pointers and can cause undefined behavior if used incorrectly.
-    unsafe {
-        if libc::if_nametoindex(c_str.as_ptr()) == 0 {
-            warn!("No interface found for name {}", name);
-            0
-        } else {
-            libc::if_nametoindex(c_str.as_ptr())
-        }
-    }
-}
-
-pub fn get_default_if_name() -> Option<String> {
-    let ifindex = DEFAULT_IF_INDEX.load(std::sync::atomic::Ordering::SeqCst);
-    let mut buf = [0u8; libc::IFNAMSIZ]; // IFNAMSIZ is typically used to define the buffer size
-
-    // Safety: This function is unsafe because it deals with raw pointers and can cause undefined behavior if used incorrectly.
-    unsafe {
-        if libc::if_indextoname(ifindex, buf.as_mut_ptr() as *mut libc::c_char).is_null() {
-            warn!("No interface found for index {}", ifindex);
-            None
-        } else {
-            let c_str = std::ffi::CStr::from_ptr(buf.as_ptr() as *const libc::c_char);
-            let str_slice = c_str.to_str().unwrap();
-            debug!("default Interface name: {}", str_slice);
-            Some(str_slice.to_owned())
-        }
-    }
-}
-
 #[tokio::test]
 async fn t1() -> io::Result<()> {
     let handle = Handle::new()?;
 
     init_default_interface(handle, None).await?;
-    let if_name = get_default_if_name();
+    let if_name = crate::net::get_default_if_name();
     println!("default if name: {:?}", if_name);
+    let if_index = crate::net::get_if_index(if_name.as_ref().map(|x| x.as_str()).unwrap_or(""));
+    // let if_index = crate::net::get_if_index("ethernet_32769");
+    println!("default if index: {:?}", if_index);
     Ok(())
 }
 
@@ -211,5 +202,15 @@ async fn t2() -> io::Result<()> {
     .await?;
 
     // println!("default if name: {:?}",);
+    Ok(())
+}
+
+#[tokio::test]
+async fn t3() -> io::Result<()> {
+    let handle = Handle::new()?;
+    let routes = handle.list().await?;
+    for route in routes {
+        println!("{:?}", route);
+    }
     Ok(())
 }
