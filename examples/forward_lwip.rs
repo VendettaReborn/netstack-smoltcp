@@ -1,14 +1,30 @@
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 
 use futures::{SinkExt, StreamExt};
 use netstack_smoltcp::{
+    dump::resolve,
     net::{get_default_if_name, get_if_index},
-    utils::{add_route, init_default_interface},
-    StackBuilder, TcpListener, UdpSocket,
+    utils::init_default_interface,
 };
+
+use netstack_lwip::*;
+use rtnetlink::new_connection;
+
 use structopt::StructOpt;
 use tokio::net::{TcpSocket, TcpStream};
 use tracing::{error, info, warn};
+
+async fn add_ipv6_addr(index: u32, ip: Ipv6Addr, prefix: u8) {
+    let (connection, handle, _) = new_connection().unwrap();
+    tokio::spawn(connection);
+
+    handle
+        .address()
+        .add(index, IpAddr::V6(ip), prefix)
+        .execute()
+        .await
+        .unwrap()
+}
 
 // to run this example, you should set the policy routing **after the start of the main program**
 //
@@ -99,6 +115,7 @@ async fn main_exec(opt: Opt) {
     let fd = -1;
     let dst = "10.10.2.1";
     let addr = "10.10.2.1";
+    let addr_v6: Ipv6Addr = "2001:1:1:1443:0:0:0:400".parse().unwrap();
     let netmask = "255.255.255.0";
     let name = "utun64";
     if fd >= 0 {
@@ -121,23 +138,22 @@ async fn main_exec(opt: Opt) {
     }
 
     // the tun device is not handled yet
-    init_default_interface(net_route::Handle::new().unwrap(), None)
-        .await
-        .unwrap();
-    let interface = opt.interface.unwrap_or(get_default_if_name().unwrap());
-    info!(
-        "using interface: {}, default if: {:?}",
-        &interface,
-        get_default_if_name()
-    );
+    // init_default_interface(net_route::Handle::new().unwrap(), None)
+    //     .await
+    //     .unwrap();
+    // let interface = opt.interface.unwrap_or(get_default_if_name().unwrap());
+    // info!(
+    //     "using interface: {}, default if: {:?}",
+    //     &interface,
+    //     get_default_if_name()
+    // );
 
     let device = tun::create_as_async(&cfg).unwrap();
-    let mut builder = StackBuilder::default();
-    if let Some(device_broadcast) = get_device_broadcast(&device) {
-        builder = builder
-            // .add_ip_filter(Box::new(move |src, dst| *src != device_broadcast && *dst != device_broadcast));
-            .add_ip_filter_fn(move |src, dst| *src != device_broadcast && *dst != device_broadcast);
-    }
+    let if_index = get_if_index(name);
+
+    add_ipv6_addr(if_index, addr_v6, 64).await;
+
+    let interface;
 
     #[cfg(debug_assertions)]
     {
@@ -146,6 +162,7 @@ async fn main_exec(opt: Opt) {
         init_default_interface(net_route::Handle::new().unwrap(), Some(if_index))
             .await
             .unwrap();
+        interface = opt.interface.unwrap_or(get_default_if_name().unwrap());
         info!(
             "re detect interface: {}, default if: {:?}",
             &interface,
@@ -153,23 +170,21 @@ async fn main_exec(opt: Opt) {
         );
     }
 
-    let mut util_opt = netstack_smoltcp::utils::Opt::default();
-    #[cfg(target_os = "linux")]
-    {
-        util_opt.table = 1989;
-    }
-    #[cfg(target_os = "windows")]
-    {
-        // util_opt.if_index = Some(get_if_index(name));
-        util_opt.luid = dbg!(device.as_ref().luid());
-    }
+    let table = 1989;
+    let opt = watfaq_tun::Opt {
+        table,
+        if_index,
+        preset: vec![],
+        gateway_ipv4: Some(addr.parse().unwrap()),
+        gateway_ipv6: Some(addr_v6),
+    };
+    watfaq_tun::add_rules(table, true, true, true)
+        .await
+        .unwrap();
+    watfaq_tun::add_route(&opt).await.unwrap();
 
-    #[cfg(target_os = "linux")]
-    netstack_smoltcp::utils::add_rules(&util_opt).await.unwrap();
-    add_route(addr.parse().unwrap(), &util_opt).await.unwrap();
-
-    let (runner, udp_socket, tcp_listener, stack) = builder.build();
-    tokio_spawn!(runner);
+    let (stack, tcp_listener, udp_socket) =
+        netstack_lwip::NetStack::with_buffer_size(512, 256).unwrap();
 
     let framed = device.into_framed();
     let (mut tun_sink, mut tun_stream) = framed.split();
@@ -203,9 +218,9 @@ async fn main_exec(opt: Opt) {
 
     // Extracts TCP connections from stack and sends them to the dispatcher.
     futs.push(tokio_spawn!({
-        let interface = interface.clone();
+        let default_if = interface.clone();
         async move {
-            handle_inbound_stream(tcp_listener, interface).await;
+            handle_inbound_stream(tcp_listener, default_if).await;
         }
     }));
 
@@ -231,7 +246,9 @@ async fn handle_inbound_stream(mut tcp_listener: TcpListener, interface: String)
         let interface = interface.clone();
         tokio::spawn(async move {
             info!("new tcp connection: {:?} => {:?}", local, remote);
+            resolve(local);
             match new_tcp_stream(remote, &interface).await {
+                // match new_tcp_stream(remote, &interface).await {
                 Ok(mut remote_stream) => {
                     // pipe between two tcp stream
                     match tokio::io::copy_bidirectional(&mut stream, &mut remote_stream).await {
@@ -252,53 +269,20 @@ async fn handle_inbound_stream(mut tcp_listener: TcpListener, interface: String)
 }
 
 /// simply forward udp datagram
-async fn handle_inbound_datagram(udp_socket: UdpSocket, interface: String) {
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let (mut read_half, mut write_half) = udp_socket.split();
-    tokio::spawn(async move {
-        while let Some((data, local, remote)) = rx.recv().await {
-            let _ = write_half.send((data, remote, local)).await;
-        }
-    });
-
-    while let Some((data, local, remote)) = read_half.next().await {
-        let tx = tx.clone();
-        let interface = interface.clone();
-        tokio::spawn(async move {
-            info!("new udp datagram: {:?} => {:?}", local, remote);
-            match new_udp_packet(remote, &interface).await {
-                Ok(remote_socket) => {
-                    // pipe between two udp sockets
-                    let _ = remote_socket.send(&data).await;
-                    loop {
-                        let mut buf = vec![0; 1024];
-                        match remote_socket.recv_from(&mut buf).await {
-                            Ok((len, _)) => {
-                                let _ = tx.send((buf[..len].to_vec(), local, remote));
-                            }
-                            Err(e) => {
-                                warn!(
-                                    "failed to recv udp datagram {:?}<->{:?}: {:?}",
-                                    local, remote, e
-                                );
-                                break;
-                            }
-                        }
-                    }
-                }
-                Err(e) => warn!(
-                    "failed to new udp socket {:?}=>{:?}, err: {:?}",
-                    local, remote, e
-                ),
-            }
-        });
-    }
-}
+async fn handle_inbound_datagram(_udp_socket: Box<UdpSocket>, _interface: String) {}
 
 async fn new_tcp_stream<'a>(addr: SocketAddr, iface: &str) -> std::io::Result<TcpStream> {
     use socket2_ext::{AddressBinding, BindDeviceOption};
-    let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)?;
-    socket.bind_to_device(BindDeviceOption::v4(iface))?;
+
+    let socket = if addr.is_ipv4() {
+        let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)?;
+        socket.bind_to_device(BindDeviceOption::v4(iface))?;
+        socket
+    } else {
+        let socket = socket2::Socket::new(socket2::Domain::IPV6, socket2::Type::STREAM, None)?;
+        socket.bind_to_device(BindDeviceOption::v6(iface))?;
+        socket
+    };
     socket.set_keepalive(true)?;
     socket.set_nodelay(true)?;
     socket.set_nonblocking(true)?;
@@ -308,63 +292,4 @@ async fn new_tcp_stream<'a>(addr: SocketAddr, iface: &str) -> std::io::Result<Tc
         .await?;
 
     Ok(stream)
-}
-
-async fn new_udp_packet(addr: SocketAddr, iface: &str) -> std::io::Result<tokio::net::UdpSocket> {
-    use socket2_ext::{AddressBinding, BindDeviceOption};
-    let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::DGRAM, None)?;
-    socket.bind_to_device(BindDeviceOption::v4(iface))?;
-    socket.set_nonblocking(true)?;
-
-    let socket = tokio::net::UdpSocket::from_std(socket.into());
-    if let Ok(ref socket) = socket {
-        socket.connect(addr).await?;
-    }
-    socket
-}
-
-fn get_device_broadcast(device: &tun::AsyncDevice) -> Option<std::net::Ipv4Addr> {
-    use tun::AbstractDevice;
-
-    let mtu = device.as_ref().mtu().unwrap_or(tun::DEFAULT_MTU);
-
-    let address = match device.as_ref().address() {
-        Ok(a) => match a {
-            IpAddr::V4(v4) => v4,
-            IpAddr::V6(_) => return None,
-        },
-        Err(_) => return None,
-    };
-
-    let netmask = match device.as_ref().netmask() {
-        Ok(n) => match n {
-            IpAddr::V4(v4) => v4,
-            IpAddr::V6(_) => return None,
-        },
-        Err(_) => return None,
-    };
-
-    match smoltcp::wire::Ipv4Cidr::from_netmask(address.into(), netmask.into()) {
-        Ok(address_net) => match address_net.broadcast() {
-            Some(broadcast) => {
-                info!(
-                    "tun device network: {} (address: {}, netmask: {}, broadcast: {}, mtu: {})",
-                    address_net, address, netmask, broadcast, mtu,
-                );
-
-                Some(broadcast.into())
-            }
-            None => {
-                error!("invalid tun address {}, netmask {}", address, netmask);
-                None
-            }
-        },
-        Err(err) => {
-            error!(
-                "invalid tun address {}, netmask {}, error: {}",
-                address, netmask, err
-            );
-            None
-        }
-    }
 }

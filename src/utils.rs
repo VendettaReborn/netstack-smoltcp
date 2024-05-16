@@ -1,6 +1,6 @@
 use std::{
     io,
-    net::{IpAddr, Ipv4Addr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::atomic::AtomicU32,
 };
 
@@ -8,14 +8,24 @@ use futures::StreamExt;
 use net_route::{Handle, Route};
 use tracing::{debug, warn};
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Opt {
     addrs: Vec<(IpAddr, u8)>,
     #[cfg(target_os = "linux")]
     pub table: u32,
     #[cfg(target_os = "windows")]
     pub luid: Option<u64>,
-    pub if_index: Option<u32>,
+    pub if_index: u32,
+}
+
+impl Opt {
+    pub fn new(table: u32, if_index: u32) -> Self {
+        Opt {
+            addrs: vec![],
+            table,
+            if_index,
+        }
+    }
 }
 
 // eq: from all lookup `opt.table`
@@ -32,9 +42,35 @@ pub async fn add_rules(opt: &Opt) -> io::Result<()> {
     // will lookup the route table, which has only one route to the tun device
     let mut rule2 = net_route::Rule::default();
     rule2.table_id = Some(opt.table);
+    rule2.dst = Some(("1.0.0.1".parse::<Ipv4Addr>().unwrap().into(), 32));
     rule2.priority = Some(7001);
 
-    handle.add_rules(vec![rule1, rule2]).await
+    let mut rule3 = net_route::Rule::default();
+    rule3.suppress_prefixlength = Some(0);
+    rule3.table_id = Some(254);
+    rule3.priority = Some(7000);
+    rule3.v6 = true;
+
+    // will lookup the route table, which has only one route to the tun device
+    let mut rule4 = net_route::Rule::default();
+    rule4.table_id = Some(opt.table);
+    rule4.priority = Some(7001);
+    rule4.dst = Some((
+        "2603:c024:f:17e:ab4e:5672:fe71:2dd7"
+            .parse::<Ipv6Addr>()
+            .unwrap()
+            .into(),
+        128,
+    ));
+    rule4.v6 = true;
+
+    let rules = vec![rule1, rule2, rule3, rule4];
+
+    // rule2.dst = Some(("1.0.0.1".parse().unwrap(), 53));
+
+    // clear before add
+    let _ = handle.delete_rules(rules.clone()).await;
+    handle.add_rules(rules).await
 }
 
 #[allow(unreachable_code, unused_variables)]
@@ -65,11 +101,12 @@ pub fn build_routes(gateway: IpAddr, opt: &Opt) -> Vec<Route> {
 
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
-        let if_index = get_if_index("utun20");
-        println!("if index of utun20: {}", if_index);
         return [
             Route::new(Ipv4Addr::UNSPECIFIED.into(), 0)
-                .with_ifindex(if_index)
+                .with_ifindex(opt.if_index)
+                .with_table(opt.table),
+            Route::new(Ipv6Addr::UNSPECIFIED.into(), 0)
+                .with_ifindex(opt.if_index)
                 .with_table(opt.table),
             // Route::new("128.0.0.0".parse().unwrap(), 1)
             //     .with_ifindex(if_index)
@@ -180,7 +217,7 @@ pub async fn monitor_default_interface(handle: Handle, this_if: Option<u32>) -> 
 }
 
 #[tokio::test]
-async fn t1() -> io::Result<()> {
+async fn test_default_if() -> io::Result<()> {
     let handle = Handle::new()?;
 
     init_default_interface(handle, None).await?;
@@ -194,23 +231,62 @@ async fn t1() -> io::Result<()> {
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-async fn t2() -> io::Result<()> {
-    add_rules(&Opt {
-        table: 1989,
-        ..Default::default()
-    })
-    .await?;
+async fn test_rules() -> io::Result<()> {
+    let mut rule1 = net_route::Rule::default();
+    rule1.suppress_prefixlength = Some(0);
+    rule1.table_id = Some(254);
+    rule1.priority = Some(7000);
 
-    // println!("default if name: {:?}",);
+    // will lookup the route table, which has only one route to the tun device
+    let mut rule2 = net_route::Rule::default();
+    rule2.table_id = Some(1989);
+    // rule2.dst = Some((
+    //     "1.0.0.1"
+    //         .parse::<Ipv4Addr>()
+    //         .unwrap()
+    //         .into(),
+    //     32,
+    // ));
+    rule2.priority = Some(7000);
+
+    let mut rule3 = net_route::Rule::default();
+    rule3.suppress_prefixlength = Some(0);
+    rule3.table_id = Some(254);
+    rule3.priority = Some(7000);
+    rule3.v6 = true;
+
+    // will lookup the route table, which has only one route to the tun device
+    let mut rule4 = net_route::Rule::default();
+    rule4.table_id = Some(1989);
+    rule4.priority = Some(7000);
+    // rule4.dst = Some((
+    //     "2603:c024:f:17e:ab4e:5672:fe71:2dd7"
+    //         .parse::<Ipv6Addr>()
+    //         .unwrap()
+    //         .into(),
+    //     128,
+    // ));
+    rule4.v6 = true;
+
+    let handle = Handle::new()?;
+    handle
+        .delete_rules(vec![rule1, rule2, rule3, rule4])
+        .await?;
     Ok(())
 }
 
 #[tokio::test]
-async fn t3() -> io::Result<()> {
+async fn test_list_routes() -> io::Result<()> {
     let handle = Handle::new()?;
-    let routes = handle.list().await?;
+    let routes = handle.list_rules().await?;
     for route in routes {
         println!("{:?}", route);
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Session {
+    pub src: SocketAddr,
+    pub dst: SocketAddr,
 }
