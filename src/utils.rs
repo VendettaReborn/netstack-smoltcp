@@ -216,6 +216,20 @@ pub async fn monitor_default_interface(handle: Handle, this_if: Option<u32>) -> 
     Ok(())
 }
 
+#[cfg(target_os="linux")]
+pub async fn add_ipv6_addr(index: u32, ip: Ipv6Addr, prefix: u8) {
+    let (connection, handle, _) = rtnetlink::new_connection().unwrap();
+    tokio::spawn(connection);
+
+    handle
+        .address()
+        .add(index, IpAddr::V6(ip), prefix)
+        .execute()
+        .await
+        .unwrap()
+}
+
+
 #[tokio::test]
 async fn test_default_if() -> io::Result<()> {
     let handle = Handle::new()?;

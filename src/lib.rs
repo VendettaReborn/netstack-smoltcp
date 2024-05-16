@@ -24,4 +24,7 @@ pub use smoltcp;
 pub mod utils;
 
 pub mod net;
+
+
+#[cfg(target_os="linux")]
 pub mod dump;

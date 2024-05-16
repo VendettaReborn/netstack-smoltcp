@@ -1,30 +1,16 @@
-use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::net::{Ipv6Addr, SocketAddr};
 
 use futures::{SinkExt, StreamExt};
 use netstack_smoltcp::{
-    dump::resolve,
     net::{get_default_if_name, get_if_index},
     utils::init_default_interface,
 };
 
 use netstack_lwip::*;
-use rtnetlink::new_connection;
 
 use structopt::StructOpt;
 use tokio::net::{TcpSocket, TcpStream};
 use tracing::{error, info, warn};
-
-async fn add_ipv6_addr(index: u32, ip: Ipv6Addr, prefix: u8) {
-    let (connection, handle, _) = new_connection().unwrap();
-    tokio::spawn(connection);
-
-    handle
-        .address()
-        .add(index, IpAddr::V6(ip), prefix)
-        .execute()
-        .await
-        .unwrap()
-}
 
 // to run this example, you should set the policy routing **after the start of the main program**
 //
@@ -137,21 +123,11 @@ async fn main_exec(opt: Opt) {
         cfg.up();
     }
 
-    // the tun device is not handled yet
-    // init_default_interface(net_route::Handle::new().unwrap(), None)
-    //     .await
-    //     .unwrap();
-    // let interface = opt.interface.unwrap_or(get_default_if_name().unwrap());
-    // info!(
-    //     "using interface: {}, default if: {:?}",
-    //     &interface,
-    //     get_default_if_name()
-    // );
-
     let device = tun::create_as_async(&cfg).unwrap();
     let if_index = get_if_index(name);
 
-    add_ipv6_addr(if_index, addr_v6, 64).await;
+    #[cfg(target_os = "linux")]
+    netstack_smoltcp::utils::add_ipv6_addr(if_index, addr_v6, 64).await;
 
     let interface;
 
@@ -246,7 +222,8 @@ async fn handle_inbound_stream(mut tcp_listener: TcpListener, interface: String)
         let interface = interface.clone();
         tokio::spawn(async move {
             info!("new tcp connection: {:?} => {:?}", local, remote);
-            resolve(local);
+            #[cfg(target_os = "linux")]
+            netstack_smoltcp::dump::resolve(local);
             match new_tcp_stream(remote, &interface).await {
                 // match new_tcp_stream(remote, &interface).await {
                 Ok(mut remote_stream) => {

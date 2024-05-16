@@ -2,7 +2,6 @@ use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 
 use futures::{SinkExt, StreamExt};
 use netstack_smoltcp::{
-    dump::resolve,
     net::{get_default_if_name, get_if_index},
     utils::init_default_interface,
     StackBuilder, TcpListener, UdpSocket,
@@ -133,10 +132,11 @@ async fn main_exec(opt: Opt) {
     device.as_mut().set_address(IpAddr::V6(addr_v6)).unwrap();
 
     let interface;
+    let if_index;
 
     #[cfg(debug_assertions)]
     {
-        let if_index = get_if_index(name);
+        if_index = get_if_index(name);
         // the tun device is not handled yet
         init_default_interface(net_route::Handle::new().unwrap(), Some(if_index))
             .await
@@ -148,6 +148,9 @@ async fn main_exec(opt: Opt) {
             get_default_if_name()
         );
     }
+
+    #[cfg(target_os = "linux")]
+    netstack_smoltcp::utils::add_ipv6_addr(if_index, addr_v6, 64).await;
 
     let table = 1989;
     let opt = watfaq_tun::Opt {
@@ -161,17 +164,6 @@ async fn main_exec(opt: Opt) {
         .await
         .unwrap();
     watfaq_tun::add_route(&opt).await.unwrap();
-
-    // let util_opt = netstack_smoltcp::utils::Opt::new(1989, get_if_index(name));
-    // #[cfg(target_os = "windows")]
-    // {
-    //     // util_opt.if_index = Some(get_if_index(name));
-    //     util_opt.luid = dbg!(device.as_ref().luid());
-    // }
-
-    // #[cfg(target_os = "linux")]
-    // netstack_smoltcp::utils::add_rules(&util_opt).await.unwrap();
-    // add_route(addr.parse().unwrap(), &util_opt).await.unwrap();
 
     let (runner, udp_socket, tcp_listener, stack) = builder.build();
     tokio_spawn!(runner);
@@ -236,7 +228,8 @@ async fn handle_inbound_stream(mut tcp_listener: TcpListener, interface: String)
         let interface = interface.clone();
         tokio::spawn(async move {
             info!("new tcp connection: {:?} => {:?}", local, remote);
-            resolve(local);
+            #[cfg(target_os = "linux")]
+            netstack_smoltcp::dump::resolve(local);
             match new_tcp_stream(remote, &interface).await {
                 // match new_tcp_stream(remote, &interface).await {
                 Ok(mut remote_stream) => {

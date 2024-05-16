@@ -56,8 +56,12 @@ tracing-subscriber = "0.3.18"
 structopt = "0.3"
 socket2 = "0.5.6"
 socket2-ext = { version = "0.1" }
-lazy_static = "1.4"
-netlink-packet-sock-diag = "0.4.2"
 netstack-lwip = { git = "https://github.com/Watfaq/netstack-lwip.git", rev = "2817bf82740e04bbee6b7bf1165f55657a6ed163" }
 watfaq-tun = { git = "https://github.com/VendettaReborn/watfaq-tun.git", rev = "b1f2498d00f322a7058c6f4bba0538ce140d5bce"}
+
+
+[target.'cfg(target_os = "linux")'.dependencies]
 rtnetlink = "0.14"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+netlink-packet-sock-diag = "0.4.2"
