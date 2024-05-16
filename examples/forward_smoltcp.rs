@@ -100,7 +100,7 @@ async fn main_exec(opt: Opt) {
     let fd = -1;
     let dst = "10.10.2.1";
     let addr = "10.10.2.1";
-    let addr_v6: Ipv6Addr = "2001:db8::1".parse().unwrap();
+    let addr_v6: Ipv6Addr = "2:2:1:1443:0:0:0:400".parse().unwrap();
     let netmask = "255.255.255.0";
     let name = "utun64";
     if fd >= 0 {
