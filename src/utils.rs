@@ -18,16 +18,6 @@ pub struct Opt {
     pub if_index: u32,
 }
 
-impl Opt {
-    pub fn new(table: u32, if_index: u32) -> Self {
-        Opt {
-            addrs: vec![],
-            table,
-            if_index,
-        }
-    }
-}
-
 // eq: from all lookup `opt.table`
 #[cfg(target_os = "linux")]
 pub async fn add_rules(opt: &Opt) -> io::Result<()> {
@@ -216,7 +206,7 @@ pub async fn monitor_default_interface(handle: Handle, this_if: Option<u32>) -> 
     Ok(())
 }
 
-#[cfg(target_os="linux")]
+#[cfg(target_os = "linux")]
 pub async fn add_ipv6_addr(index: u32, ip: Ipv6Addr, prefix: u8) {
     let (connection, handle, _) = rtnetlink::new_connection().unwrap();
     tokio::spawn(connection);
@@ -228,7 +218,6 @@ pub async fn add_ipv6_addr(index: u32, ip: Ipv6Addr, prefix: u8) {
         .await
         .unwrap()
 }
-
 
 #[tokio::test]
 async fn test_default_if() -> io::Result<()> {
