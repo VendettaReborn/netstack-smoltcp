@@ -36,11 +36,7 @@ net-route = { git = "https://github.com/VendettaReborn/net-route.git", rev = "ce
 libc = "0.2.153"
 socket2 = "0.5.6"
 bytes = "1.6.0"
-windows-sys = {version = "0.52",features = ["Win32_Foundation","Win32_NetworkManagement_IpHelper","Win32_NetworkManagement_Ndis","Win32_Networking_WinSock","Win32_System_IO"]}
-winapi = { version = "0.3"}
-netlink-packet-sock-diag = "0.4.2"
-netlink-packet-core = "0.7.0"
-netlink-sys = "0.8.6"
+
 # ipconfig = {version = "0.3.2", path = "../ipconfig"}
 
 [dev-dependencies]
@@ -59,9 +55,15 @@ socket2-ext = { version = "0.1" }
 netstack-lwip = { git = "https://github.com/Watfaq/netstack-lwip.git", rev = "2817bf82740e04bbee6b7bf1165f55657a6ed163" }
 watfaq-tun = { git = "https://github.com/VendettaReborn/watfaq-tun.git", rev = "b1f2498d00f322a7058c6f4bba0538ce140d5bce"}
 
-
 [target.'cfg(target_os = "linux")'.dependencies]
 rtnetlink = "0.14"
+netlink-packet-sock-diag = "0.4.2"
+netlink-packet-core = "0.7.0"
+netlink-sys = "0.8.6"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = {version = "0.52",features = ["Win32_Foundation","Win32_NetworkManagement_IpHelper","Win32_NetworkManagement_Ndis","Win32_Networking_WinSock","Win32_System_IO"]}
+winapi = { version = "0.3"}
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 netlink-packet-sock-diag = "0.4.2"
