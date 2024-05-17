@@ -153,11 +153,12 @@ async fn main_exec(opt: Opt) {
     netstack_smoltcp::utils::add_ipv6_addr(if_index, addr_v6, 64).await;
 
     let opt;
+    let table = 1989;
 
     #[cfg(target_os = "linux")]
     {
         opt = watfaq_tun::Opt {
-            table: 1989,
+            table,
             if_index: get_if_index(name),
             preset: vec![],
             gateway_ipv4: Some(addr.parse().unwrap()),
@@ -176,7 +177,7 @@ async fn main_exec(opt: Opt) {
     }
 
     #[cfg(target_os = "linux")]
-    watfaq_tun::add_rules(table, true, true, true)
+    watfaq_tun::platform::add_rules(table, true, true, true)
         .await
         .unwrap();
     watfaq_tun::add_route(&opt).await.unwrap();

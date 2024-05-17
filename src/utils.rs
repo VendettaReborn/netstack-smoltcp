@@ -269,6 +269,8 @@ async fn test_clear() -> io::Result<()> {
     let handle = Handle::new().unwrap();
 
     let opt = watfaq_tun::Opt {
+        #[cfg(target_os = "linux")]
+        table: 1989,
         preset: vec![],
         if_index: 1,
         gateway_ipv4: Some("10.10.2.1".parse().unwrap()),
