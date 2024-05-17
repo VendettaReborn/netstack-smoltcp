@@ -274,7 +274,7 @@ async fn test_clear() -> io::Result<()> {
         gateway_ipv4: Some("10.10.2.1".parse().unwrap()),
         gateway_ipv6: Some("2:2:1:1443::400".parse().unwrap()),
     };
-    let routes = watfaq_tun::build_routes(&opt);
+    let routes = watfaq_tun::platform::build_routes(&opt);
     assert_eq!(routes.len(), 16);
 
     for route in routes {
