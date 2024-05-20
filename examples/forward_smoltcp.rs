@@ -9,7 +9,6 @@ use netstack_smoltcp::{
 use structopt::StructOpt;
 use tokio::net::{TcpSocket, TcpStream};
 use tracing::{error, info, warn};
-use tun::AbstractDevice;
 
 // to run this example, you should set the policy routing **after the start of the main program**
 //
@@ -122,14 +121,13 @@ async fn main_exec(opt: Opt) {
         cfg.up();
     }
 
-    let mut device = tun::create_as_async(&cfg).unwrap();
+    let device = tun::create_as_async(&cfg).unwrap();
     let mut builder = StackBuilder::default();
     if let Some(device_broadcast) = get_device_broadcast(&device) {
         builder = builder
             // .add_ip_filter(Box::new(move |src, dst| *src != device_broadcast && *dst != device_broadcast));
             .add_ip_filter_fn(move |src, dst| *src != device_broadcast && *dst != device_broadcast);
     }
-    device.as_mut().set_address(IpAddr::V6(addr_v6)).unwrap();
 
     let interface;
     let if_index;
@@ -152,6 +150,8 @@ async fn main_exec(opt: Opt) {
     #[cfg(target_os = "linux")]
     netstack_smoltcp::utils::add_ipv6_addr(if_index, addr_v6, 64).await;
 
+    #[cfg(target_os = "macos")]
+    netstack_smoltcp::utils::add_ipv6_addr(name, addr_v6, 64).await;
     let opt;
     let table = 1989;
 
