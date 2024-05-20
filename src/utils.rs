@@ -42,14 +42,15 @@ pub async fn init_default_interface(handle: Handle, this_if: Option<u32>) -> io:
     }
 }
 
-pub async fn monitor_default_interface(handle: Handle, this_if: Option<u32>) -> io::Result<()> {
+pub async fn use_monitor2(tun_if: Option<u32>) -> io::Result<()> {
+    let handle = Handle::new().unwrap();
     let stream = handle.route_listen_stream();
     futures::pin_mut!(stream);
 
     println!("Listening for route events, press Ctrl+C to cancel...");
     while let Some(event) = stream.next().await {
         println!("event:{:?}", event);
-        if let Some(route) = get_default_interface_exclude_self(&handle, this_if).await? {
+        if let Some(route) = get_default_interface_exclude_self(&handle, tun_if).await? {
             println!("Default route:\n{:?}", route);
             DEFAULT_IF_INDEX.store(
                 route.ifindex.unwrap_or_default(),
@@ -60,6 +61,99 @@ pub async fn monitor_default_interface(handle: Handle, this_if: Option<u32>) -> 
         }
     }
     Ok(())
+}
+
+pub async fn use_monitor_async<F: std::future::Future<Output = ()> + Send + Sync>(
+    tun_if: Option<u32>,
+    callback: impl (Fn(Route) -> F) + Send + 'static,
+) -> io::Result<(Option<u32>, tokio::sync::oneshot::Sender<u8>)> {
+    let handle = Handle::new().unwrap();
+    let default_if = get_default_interface_exclude_self(&handle, tun_if)
+        .await?
+        .map(|r| r.ifindex)
+        .unwrap_or_default();
+
+    let (close_sender, close_receiver) = tokio::sync::oneshot::channel::<u8>();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
+    let tx_handle = tokio::spawn(async move {
+        let stream = handle.route_listen_stream();
+        tokio::pin!(stream);
+        tracing::warn!("listening for route events...");
+
+        while let Some(_event) = stream.next().await {
+            println!("route change event:{:?}", _event);
+            if let Ok(Some(route)) = get_default_interface_exclude_self(&handle, tun_if).await {
+                let _ = tx.send(route).await;
+            } else {
+                tracing::warn!("No default route found!");
+            }
+        }
+        tracing::info!("route event stream ended!");
+    });
+
+    let rx_handle = tokio::spawn(async move {
+        while let Some(route) = rx.recv().await {
+            callback(route).await;
+        }
+        tracing::info!("route event stream ended!");
+    });
+
+    tokio::spawn(async move {
+        let _ = close_receiver.await;
+        tracing::info!("aborting...");
+        tx_handle.abort();
+        rx_handle.abort();
+    });
+    Ok((default_if, close_sender))
+}
+
+pub async fn use_monitor(
+    tun_if: Option<u32>,
+    callback: impl Fn(&Route) + Send + 'static,
+) -> io::Result<(Option<u32>, tokio::sync::oneshot::Sender<u8>)> {
+    let handle = Handle::new().unwrap();
+    let default_if = get_default_interface_exclude_self(&handle, tun_if)
+        .await?
+        .map(|r| r.ifindex)
+        .unwrap_or_default();
+
+    let (close_sender, close_receiver) = tokio::sync::oneshot::channel::<u8>();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
+    let tx_handle = tokio::spawn(async move {
+        let stream = handle.route_listen_stream();
+        tokio::pin!(stream);
+        tracing::warn!("listening for route events...");
+
+        while let Some(_event) = stream.next().await {
+            println!("route change event:{:?}", _event);
+            if let Ok(Some(route)) = get_default_interface_exclude_self(&handle, tun_if).await {
+                let _ = tx.send(route).await;
+            } else {
+                tracing::warn!("No default route found!");
+            }
+        }
+        tracing::info!("route event stream ended!");
+    });
+
+    let rx_handle = tokio::spawn(async move {
+        while let Some(route) = rx.recv().await {
+            callback(&route);
+            DEFAULT_IF_INDEX.store(
+                route.ifindex.unwrap_or_default(),
+                std::sync::atomic::Ordering::SeqCst,
+            );
+            println!("new default if index:{}", route.ifindex.unwrap_or_default());
+        }
+        tracing::info!("route event stream ended!");
+    });
+
+    tokio::spawn(async move {
+        let _ = close_receiver.await;
+        tracing::info!("aborting...");
+        tx_handle.abort();
+        rx_handle.abort();
+    });
+    Ok((default_if, close_sender))
 }
 
 #[cfg(target_os = "linux")]
@@ -201,7 +295,7 @@ async fn test_default_if() -> io::Result<()> {
     init_default_interface(handle, None).await?;
     let if_name = crate::net::get_default_if_name();
     println!("default if name: {:?}", if_name);
-    let if_index = crate::net::get_if_index(if_name.as_ref().map(|x| x.as_str()).unwrap_or(""));
+    let if_index = crate::net::if_nametoindex(if_name.as_ref().map(|x| x.as_str()).unwrap_or(""));
     // let if_index = crate::net::get_if_index("ethernet_32769");
     println!("default if index: {:?}", if_index);
     Ok(())

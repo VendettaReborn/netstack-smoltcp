@@ -168,7 +168,7 @@ pub fn apply_tcp_options(s: TcpStream) -> std::io::Result<TcpStream> {
 }
 
 #[allow(unreachable_code)]
-pub fn get_if_index(name: &str) -> u32 {
+pub fn if_nametoindex(name: &str) -> u32 {
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     {
         let c_str = std::ffi::CString::new(name).unwrap();
@@ -190,6 +190,34 @@ pub fn get_if_index(name: &str) -> u32 {
             .unwrap_or(0);
     }
     return 0;
+}
+
+#[allow(unreachable_code)]
+pub fn if_indextoname(ifindex: u32) -> Option<String> {
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+    {
+        let mut buf = [0u8; libc::IFNAMSIZ]; // IFNAMSIZ is typically used to define the buffer size
+
+        // Safety: This function is unsafe because it deals with raw pointers and can cause undefined behavior if used incorrectly.
+        return unsafe {
+            if libc::if_indextoname(ifindex, buf.as_mut_ptr() as *mut libc::c_char).is_null() {
+                warn!("No interface found for index {}", ifindex);
+                None
+            } else {
+                let c_str = std::ffi::CStr::from_ptr(buf.as_ptr() as *const libc::c_char);
+                let str_slice = c_str.to_str().unwrap();
+                debug!("default Interface name: {}", str_slice);
+                Some(str_slice.to_owned())
+            }
+        };
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let adapters = ipconfig::get_adapters().unwrap();
+        let adapter = adapters.iter().find(|a| a.ipv4_if_index() == ifindex);
+        return adapter.map(|a| a.friendly_name().to_string());
+    }
+    None
 }
 
 #[allow(unreachable_code)]

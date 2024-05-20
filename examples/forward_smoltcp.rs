@@ -1,13 +1,19 @@
-use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::{
+    net::{IpAddr, Ipv6Addr, SocketAddr},
+    sync::Arc,
+};
 
 use futures::{SinkExt, StreamExt};
 use netstack_smoltcp::{
-    net::{get_default_if_name, get_if_index},
+    net::{get_default_if_name, if_nametoindex},
     utils::init_default_interface,
     StackBuilder, TcpListener, UdpSocket,
 };
 use structopt::StructOpt;
-use tokio::net::{TcpSocket, TcpStream};
+use tokio::{
+    net::{TcpSocket, TcpStream},
+    sync::RwLock,
+};
 use tracing::{error, info, warn};
 
 // to run this example, you should set the policy routing **after the start of the main program**
@@ -35,6 +41,13 @@ use tracing::{error, info, warn};
 // `curl 1.1.1.1`
 //
 // currently, the example only supports the TCP stream, and the UDP packet will be dropped.
+// and the changes of default interface will be detected and updated automatically.
+
+static DEFAULT_IF_INDEX: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+lazy_static::lazy_static! {
+    static ref DEFAULT_IF_NAME: Arc<RwLock<String>> = Arc::new(RwLock::new("".into()));
+}
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "forward", about = "Simply forward tun tcp/udp traffic.")]
@@ -101,11 +114,11 @@ async fn main_exec(opt: Opt) {
     let addr = "10.10.2.1";
     let addr_v6: Ipv6Addr = "2:2:1:1443:0:0:0:400".parse().unwrap();
     let netmask = "255.255.255.0";
-    let name = "utun64";
+    let tun_name = "utun64";
     if fd >= 0 {
         cfg.raw_fd(fd);
     } else {
-        cfg.tun_name(name)
+        cfg.tun_name(tun_name)
             .address(addr)
             .destination(dst)
             .mtu(tun::DEFAULT_MTU);
@@ -129,12 +142,17 @@ async fn main_exec(opt: Opt) {
             .add_ip_filter_fn(move |src, dst| *src != device_broadcast && *dst != device_broadcast);
     }
 
+    let default_if_index_opt = opt
+        .interface
+        .as_ref()
+        .map(|i| if_nametoindex(i));
+
     let interface;
     let if_index;
 
     #[cfg(debug_assertions)]
     {
-        if_index = get_if_index(name);
+        if_index = if_nametoindex(tun_name);
         // the tun device is not handled yet
         init_default_interface(net_route::Handle::new().unwrap(), Some(if_index))
             .await
@@ -147,11 +165,46 @@ async fn main_exec(opt: Opt) {
         );
     }
 
+    async fn update_default_if(if_index: u32) {
+        tracing::info!("updating default if...");
+        DEFAULT_IF_INDEX.store(if_index, std::sync::atomic::Ordering::SeqCst);
+        let new_if_name = netstack_smoltcp::net::if_indextoname(if_index).unwrap();
+        tracing::info!("new default if: {}", new_if_name);
+        *DEFAULT_IF_NAME.write().await = new_if_name;
+    }
+
+    // ignore the close notifier
+    let (default_if_index, close_sender) =
+        netstack_smoltcp::utils::use_monitor_async(Some(if_index), |route| async move {
+            match route.ifindex {
+                Some(if_index) => update_default_if(if_index).await,
+                None => {
+                    tracing::warn!("no default interface index found");
+                }
+            }
+        })
+        .await
+        .unwrap();
+
+    // if there is any default interface specified or detected, use it
+    // or just return, we should have a default interface to work with
+    match (default_if_index_opt, default_if_index) {
+        (Some(if_index), _) | (None, Some(if_index)) => {
+            DEFAULT_IF_INDEX.store(if_index, std::sync::atomic::Ordering::SeqCst);
+            *DEFAULT_IF_NAME.write().await =
+                netstack_smoltcp::net::if_indextoname(if_index).unwrap();
+        }
+        (None, None) => {
+            tracing::error!("failed to get default interface index");
+            return;
+        }
+    }
+
     #[cfg(target_os = "linux")]
     netstack_smoltcp::utils::add_ipv6_addr(if_index, addr_v6, 64).await;
 
     #[cfg(target_os = "macos")]
-    netstack_smoltcp::utils::add_ipv6_addr(name, addr_v6, 64).await;
+    netstack_smoltcp::utils::add_ipv6_addr(tun_name, addr_v6, 64).await;
     let opt;
     let table = 1989;
 
@@ -159,7 +212,7 @@ async fn main_exec(opt: Opt) {
     {
         opt = watfaq_tun::Opt {
             table,
-            if_index: get_if_index(name),
+            if_index: if_nametoindex(tun_name),
             preset: vec![],
             gateway_ipv4: Some(addr.parse().unwrap()),
             gateway_ipv6: Some(addr_v6),
@@ -169,7 +222,7 @@ async fn main_exec(opt: Opt) {
     #[cfg(target_os = "macos")]
     {
         opt = watfaq_tun::Opt {
-            if_index: get_if_index(name),
+            if_index: if_nametoindex(tun_name),
             preset: vec![],
             gateway_ipv4: Some(addr.parse().unwrap()),
             gateway_ipv6: Some(addr_v6),
@@ -217,16 +270,15 @@ async fn main_exec(opt: Opt) {
 
     // Extracts TCP connections from stack and sends them to the dispatcher.
     futs.push(tokio_spawn!({
-        let default_if = interface.clone();
         async move {
-            handle_inbound_stream(tcp_listener, default_if).await;
+            handle_inbound_stream(tcp_listener).await;
         }
     }));
 
     // Receive and send UDP packets between netstack and NAT manager. The NAT
     // manager would maintain UDP sessions and send them to the dispatcher.
     futs.push(tokio_spawn!(async move {
-        handle_inbound_datagram(udp_socket, interface).await;
+        handle_inbound_datagram(udp_socket).await;
     }));
 
     futures::future::join_all(futs)
@@ -237,12 +289,13 @@ async fn main_exec(opt: Opt) {
                 error!("error: {:?}", e);
             }
         });
+    drop(close_sender);
 }
 
 /// simply forward tcp stream
-async fn handle_inbound_stream(mut tcp_listener: TcpListener, interface: String) {
+async fn handle_inbound_stream(mut tcp_listener: TcpListener) {
     while let Some((mut stream, local, remote)) = tcp_listener.next().await {
-        let interface = interface.clone();
+        let interface = DEFAULT_IF_NAME.read().await.clone();
         tokio::spawn(async move {
             info!("new tcp connection: {:?} => {:?}", local, remote);
             #[cfg(target_os = "linux")]
@@ -270,7 +323,7 @@ async fn handle_inbound_stream(mut tcp_listener: TcpListener, interface: String)
 }
 
 /// simply forward udp datagram
-async fn handle_inbound_datagram(udp_socket: UdpSocket, interface: String) {
+async fn handle_inbound_datagram(udp_socket: UdpSocket) {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let (mut read_half, mut write_half) = udp_socket.split();
     tokio::spawn(async move {
@@ -281,7 +334,7 @@ async fn handle_inbound_datagram(udp_socket: UdpSocket, interface: String) {
 
     while let Some((data, local, remote)) = read_half.next().await {
         let tx = tx.clone();
-        let interface = interface.clone();
+        let interface = DEFAULT_IF_NAME.read().await.clone();
         tokio::spawn(async move {
             info!("new udp datagram: {:?} => {:?}", local, remote);
             match new_udp_packet(remote, &interface).await {

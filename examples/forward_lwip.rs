@@ -2,7 +2,7 @@ use std::net::{Ipv6Addr, SocketAddr};
 
 use futures::{SinkExt, StreamExt};
 use netstack_smoltcp::{
-    net::{get_default_if_name, get_if_index},
+    net::{get_default_if_name, if_nametoindex},
     utils::init_default_interface,
 };
 
@@ -124,7 +124,7 @@ async fn main_exec(opt: Opt) {
     }
 
     let device = tun::create_as_async(&cfg).unwrap();
-    let if_index = get_if_index(name);
+    let if_index = if_nametoindex(name);
 
     #[cfg(target_os = "linux")]
     netstack_smoltcp::utils::add_ipv6_addr(if_index, addr_v6, 64).await;
@@ -155,7 +155,7 @@ async fn main_exec(opt: Opt) {
     {
         opt = watfaq_tun::Opt {
             table,
-            if_index: get_if_index(name),
+            if_index: if_nametoindex(name),
             preset: vec![],
             gateway_ipv4: Some(addr.parse().unwrap()),
             gateway_ipv6: Some(addr_v6),
@@ -165,7 +165,7 @@ async fn main_exec(opt: Opt) {
     #[cfg(target_os = "macos")]
     {
         opt = watfaq_tun::Opt {
-            if_index: get_if_index(name),
+            if_index: if_nametoindex(name),
             preset: vec![],
             gateway_ipv4: Some(addr.parse().unwrap()),
             gateway_ipv6: Some(addr_v6),

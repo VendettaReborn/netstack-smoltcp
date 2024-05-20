@@ -57,6 +57,7 @@ socket2-ext = { version = "0.1" }
 netstack-lwip = { git = "https://github.com/Watfaq/netstack-lwip.git", rev = "2817bf82740e04bbee6b7bf1165f55657a6ed163" }
 #watfaq-tun = { git = "https://github.com/VendettaReborn/watfaq-tun.git", rev = "7852ed5687c15aa2408feed00dcb532594eb0a5c"}
 watfaq-tun = { git = "https://github.com/VendettaReborn/watfaq-tun.git", rev = "a99e635b270f6cd8615a08f9d473c1aabfc70c32" }
+lazy_static = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 rtnetlink = "0.14"
