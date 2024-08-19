@@ -53,7 +53,7 @@ pub fn if_nametoindex(name: &str) -> u32 {
             .unwrap_or_default()
             .unwrap_or_default();
     }
-    return 0;
+    0
 }
 
 #[allow(unreachable_code)]

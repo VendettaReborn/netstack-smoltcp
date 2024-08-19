@@ -295,7 +295,7 @@ async fn test_default_if() -> io::Result<()> {
     init_default_interface(handle, None).await?;
     let if_name = crate::net::get_default_if_name();
     println!("default if name: {:?}", if_name);
-    let if_index = crate::net::if_nametoindex(if_name.as_ref().map(|x| x.as_str()).unwrap_or(""));
+    let if_index = crate::net::if_nametoindex(if_name.as_deref().unwrap_or(""));
     // let if_index = crate::net::get_if_index("ethernet_32769");
     println!("default if index: {:?}", if_index);
     Ok(())

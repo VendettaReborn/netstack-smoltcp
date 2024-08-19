@@ -112,7 +112,7 @@ async fn main_exec(opt: Opt) {
     let fd = -1;
     let dst = "10.10.2.1";
     let addr = "10.10.2.1";
-    let addr_v6: Ipv6Addr = "2:2:1:1443:0:0:0:400".parse().unwrap();
+    let _addr_v6: Ipv6Addr = "2:2:1:1443:0:0:0:400".parse().unwrap();
     let netmask = "255.255.255.0";
     let tun_name = "utun64";
     if fd >= 0 {
@@ -202,8 +202,8 @@ async fn main_exec(opt: Opt) {
 
     #[cfg(target_os = "macos")]
     netstack_smoltcp::utils::add_ipv6_addr(tun_name, addr_v6, 64).await;
-    let opt: Opt;
-    let table = 1989;
+    let _opt: Opt;
+    let _table = 1989;
 
     #[cfg(target_os = "linux")]
     {
