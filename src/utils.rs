@@ -16,10 +16,10 @@ async fn get_default_interface_exclude_self(
 ) -> io::Result<Option<Route>> {
     for route in handle.list().await? {
         if (route.destination == Ipv4Addr::UNSPECIFIED
-            || route.destination == std::net::Ipv6Addr::UNSPECIFIED)
+            || route.destination == Ipv6Addr::UNSPECIFIED)
             && route.prefix == 0
             && route.gateway != Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
-            && route.gateway != Some(IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED))
+            && route.gateway != Some(IpAddr::V6(Ipv6Addr::UNSPECIFIED))
             && (this.is_none() || route.ifindex != this)
         {
             return Ok(Some(route));
@@ -358,6 +358,7 @@ async fn test_list_routes() -> io::Result<()> {
     Ok(())
 }
 
+// show compile on all desktop platforms
 #[tokio::test]
 async fn test_clear() -> io::Result<()> {
     let handle = Handle::new().unwrap();
@@ -367,6 +368,8 @@ async fn test_clear() -> io::Result<()> {
         table: 1989,
         preset: vec![],
         if_index: 1,
+        #[cfg(target_os = "windows")]
+        luid: None,
         gateway_ipv4: Some("10.10.2.1".parse().unwrap()),
         gateway_ipv6: Some("2:2:1:1443::400".parse().unwrap()),
     };

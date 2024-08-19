@@ -148,7 +148,7 @@ async fn main_exec(opt: Opt) {
         );
     }
 
-    let opt;
+    let opt: Opt;
     let table = 1989;
 
     #[cfg(target_os = "linux")]
@@ -175,7 +175,7 @@ async fn main_exec(opt: Opt) {
     watfaq_tun::platform::add_rules(table, true, true, true)
         .await
         .unwrap();
-    watfaq_tun::add_route(&opt).await.unwrap();
+    // watfaq_tun::add_route(&opt).await.unwrap();
 
     let (stack, tcp_listener, udp_socket) =
         netstack_lwip::NetStack::with_buffer_size(512, 256).unwrap();

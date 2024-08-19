@@ -37,9 +37,11 @@ libc = "0.2.153"
 socket2 = "0.5.6"
 bytes = "1.6.0"
 ipnet = "2.9.0"
-watfaq-tun = { git = "https://github.com/VendettaReborn/watfaq-tun.git", rev = "a99e635b270f6cd8615a08f9d473c1aabfc70c32" }
+watfaq-tun = { git = "https://github.com/VendettaReborn/watfaq-tun.git", rev = "19985a" }
 
 # ipconfig = {version = "0.3.2", path = "../ipconfig"}
+ipconfig2 =  { git = "https://github.com/hsqStephenZhang/ipconfig2.git", rev = "cb81135" }
+
 
 [dev-dependencies]
 tun = { git = "https://github.com/VendettaReborn/rust-tun.git" ,rev = "48b98ca4be012e8edfe45321e609bc2666fb79a8", package = "tun2", features = ["async"] }
@@ -56,7 +58,7 @@ socket2 = "0.5.6"
 socket2-ext = { version = "0.1" }
 netstack-lwip = { git = "https://github.com/Watfaq/netstack-lwip.git", rev = "2817bf82740e04bbee6b7bf1165f55657a6ed163" }
 #watfaq-tun = { git = "https://github.com/VendettaReborn/watfaq-tun.git", rev = "7852ed5687c15aa2408feed00dcb532594eb0a5c"}
-watfaq-tun = { git = "https://github.com/VendettaReborn/watfaq-tun.git", rev = "a99e635b270f6cd8615a08f9d473c1aabfc70c32" }
+watfaq-tun = { git = "https://github.com/VendettaReborn/watfaq-tun.git", rev = "19985a" }
 lazy_static = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]

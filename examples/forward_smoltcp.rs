@@ -142,10 +142,7 @@ async fn main_exec(opt: Opt) {
             .add_ip_filter_fn(move |src, dst| *src != device_broadcast && *dst != device_broadcast);
     }
 
-    let default_if_index_opt = opt
-        .interface
-        .as_ref()
-        .map(|i| if_nametoindex(i));
+    let default_if_index_opt = opt.interface.as_ref().map(|i| if_nametoindex(i));
 
     let interface;
     let if_index;
@@ -205,7 +202,7 @@ async fn main_exec(opt: Opt) {
 
     #[cfg(target_os = "macos")]
     netstack_smoltcp::utils::add_ipv6_addr(tun_name, addr_v6, 64).await;
-    let opt;
+    let opt: Opt;
     let table = 1989;
 
     #[cfg(target_os = "linux")]
@@ -233,7 +230,7 @@ async fn main_exec(opt: Opt) {
     watfaq_tun::platform::add_rules(table, true, true, true)
         .await
         .unwrap();
-    watfaq_tun::add_route(&opt).await.unwrap();
+    // watfaq_tun::add_route(&opt).await.unwrap();
 
     let (runner, udp_socket, tcp_listener, stack) = builder.build();
     tokio_spawn!(runner);

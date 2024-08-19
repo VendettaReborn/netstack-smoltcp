@@ -2,146 +2,10 @@ use std::time::Duration;
 
 use socket2::TcpKeepalive;
 use tokio::net::TcpStream;
+#[allow(unused)]
 use tracing::{debug, warn};
 
 use crate::utils::DEFAULT_IF_INDEX;
-
-#[cfg(target_os = "windows")]
-mod win_net {
-    use std::{
-        cell::RefCell,
-        collections::HashMap,
-        ffi::CString,
-        io::{self, ErrorKind},
-        mem,
-        os::windows::io::AsRawSocket,
-        time::{Duration, Instant},
-    };
-
-    use tracing::error;
-    use windows_sys::{
-        core::PCSTR,
-        Win32::{
-            NetworkManagement::IpHelper::if_nametoindex,
-            Networking::WinSock::{
-                htonl, setsockopt, WSAGetLastError, IPPROTO_IP, IPPROTO_IPV6, IPV6_UNICAST_IF,
-                IP_UNICAST_IF, SOCKET, SOCKET_ERROR,
-            },
-        },
-    };
-
-    pub fn find_adapter_interface_index(is_ipv6: bool, iface: &str) -> io::Result<Option<u32>> {
-        let adapaters =
-            ipconfig::get_adapters().map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?;
-        let if_index = adapaters
-            .iter()
-            .filter(|a| {
-                if is_ipv6 {
-                    a.ipv6_if_index() != 0
-                } else {
-                    a.ipv4_if_index() != 0
-                }
-            })
-            .find(|a| a.friendly_name() == iface || a.adapter_name() == iface)
-            .map(|adapter| adapter.ipv4_if_index());
-        Ok(if_index)
-    }
-
-    fn find_interface_index_cached(is_ipv6: bool, iface: &str) -> io::Result<u32> {
-        const INDEX_EXPIRE_DURATION: Duration = Duration::from_secs(5);
-
-        thread_local! {
-            static INTERFACE_INDEX_CACHE: RefCell<HashMap<String, (u32, Instant)>> =
-                RefCell::new(HashMap::new());
-        }
-
-        let cache_index = INTERFACE_INDEX_CACHE.with(|cache| cache.borrow().get(iface).cloned());
-        if let Some((idx, insert_time)) = cache_index {
-            // short-path, cache hit for most cases
-            let now = Instant::now();
-            if now - insert_time < INDEX_EXPIRE_DURATION {
-                return Ok(idx);
-            }
-        }
-
-        // Get from API GetAdaptersAddresses
-        let idx = match find_adapter_interface_index(is_ipv6, iface)? {
-            Some(idx) => idx,
-            None => unsafe {
-                // Windows if_nametoindex requires a C-string for interface name
-                let ifname = CString::new(iface).expect("iface");
-
-                // https://docs.microsoft.com/en-us/previous-versions/windows/hardware/drivers/ff553788(v=vs.85)
-                let if_index = if_nametoindex(ifname.as_ptr() as PCSTR);
-                if if_index == 0 {
-                    // If the if_nametoindex function fails and returns zero, it is not possible to determine an error code.
-                    error!("if_nametoindex {} fails", iface);
-                    return Err(io::Error::new(
-                        ErrorKind::InvalidInput,
-                        "invalid interface name",
-                    ));
-                }
-
-                if_index
-            },
-        };
-
-        INTERFACE_INDEX_CACHE.with(|cache| {
-            cache
-                .borrow_mut()
-                .insert(iface.to_owned(), (idx, Instant::now()));
-        });
-
-        Ok(idx)
-    }
-
-    // the addr doesn't matter, it's just a mark of ip version
-    #[allow(unused)]
-    pub fn set_ip_unicast_if<S: AsRawSocket>(
-        socket: &S,
-        is_ipv6: bool,
-        iface: &str,
-    ) -> io::Result<()> {
-        let handle = socket.as_raw_socket() as SOCKET;
-
-        let if_index = find_interface_index_cached(is_ipv6, iface)?;
-
-        unsafe {
-            // https://docs.microsoft.com/en-us/windows/win32/winsock/ipproto-ip-socket-options
-            let ret = if !is_ipv6 {
-                // Interface index is in network byte order for IPPROTO_IP.
-                let if_index = htonl(if_index);
-                setsockopt(
-                    handle,
-                    IPPROTO_IP as i32,
-                    IP_UNICAST_IF as i32,
-                    &if_index as *const _ as PCSTR,
-                    mem::size_of_val(&if_index) as i32,
-                )
-            } else {
-                // Interface index is in host byte order for IPPROTO_IPV6.
-                setsockopt(
-                    handle,
-                    IPPROTO_IPV6 as i32,
-                    IPV6_UNICAST_IF as i32,
-                    &if_index as *const _ as PCSTR,
-                    mem::size_of_val(&if_index) as i32,
-                )
-            };
-
-            if ret == SOCKET_ERROR {
-                let err = io::Error::from_raw_os_error(WSAGetLastError());
-                error!(
-                    "set IP_UNICAST_IF / IPV6_UNICAST_IF interface: {}, index: {}, error: {}",
-                    iface, if_index, err
-                );
-                return Err(err);
-            }
-        }
-
-        Ok(())
-    }
-}
 
 pub fn apply_tcp_options(s: TcpStream) -> std::io::Result<TcpStream> {
     #[cfg(not(target_os = "windows"))]
@@ -185,9 +49,9 @@ pub fn if_nametoindex(name: &str) -> u32 {
 
     #[cfg(target_os = "windows")]
     {
-        return win_net::find_adapter_interface_index(false, name)
+        return ipconfig2::if_nametoindex(false, name)
             .unwrap_or_default()
-            .unwrap_or(0);
+            .unwrap_or_default();
     }
     return 0;
 }
@@ -213,9 +77,9 @@ pub fn if_indextoname(ifindex: u32) -> Option<String> {
     }
     #[cfg(target_os = "windows")]
     {
-        let adapters = ipconfig::get_adapters().unwrap();
-        let adapter = adapters.iter().find(|a| a.ipv4_if_index() == ifindex);
-        return adapter.map(|a| a.friendly_name().to_string());
+        let adapters = ipconfig2::get_adapters().unwrap();
+        let adapter = adapters.iter().find(|a| a.ipv4_if_index == ifindex);
+        return adapter.map(|a| a.friendly_name.clone());
     }
     None
 }
@@ -242,9 +106,9 @@ pub fn get_default_if_name() -> Option<String> {
     }
     #[cfg(target_os = "windows")]
     {
-        let adapters = ipconfig::get_adapters().unwrap();
-        let adapter = adapters.iter().find(|a| a.ipv4_if_index() == ifindex);
-        return adapter.map(|a| a.friendly_name().to_string());
+        let adapters = ipconfig2::get_adapters().unwrap();
+        let adapter = adapters.iter().find(|a| a.ipv4_if_index == ifindex);
+        return adapter.map(|a| a.friendly_name.clone());
     }
     None
 }
@@ -258,7 +122,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "not a real test"]
     async fn test_connect_tcp() {
-        let if_index = win_net::find_adapter_interface_index(false, "wlo1").unwrap();
+        let if_index = ipconfig2::if_nametoindex(false, "wlo1").unwrap();
         assert!(if_index.is_some());
     }
 
@@ -276,7 +140,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "not a real test"]
     async fn test_list() {
-        let adapters = ipconfig::get_adapters().unwrap();
+        let adapters = ipconfig2::get_adapters().unwrap();
         for adapter in adapters {
             println!("{:?}", adapter);
         }
