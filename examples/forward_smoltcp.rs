@@ -202,12 +202,12 @@ async fn main_exec(opt: Opt) {
 
     #[cfg(target_os = "macos")]
     netstack_smoltcp::utils::add_ipv6_addr(tun_name, addr_v6, 64).await;
-    let _opt: Opt;
+    let auto_route_opt: watfaq_tun::Opt;
     let _table = 1989;
 
     #[cfg(target_os = "linux")]
     {
-        opt = watfaq_tun::Opt {
+        auto_route_opt = watfaq_tun::Opt {
             table,
             if_index: if_nametoindex(tun_name),
             preset: vec![],
@@ -218,7 +218,7 @@ async fn main_exec(opt: Opt) {
 
     #[cfg(target_os = "macos")]
     {
-        opt = watfaq_tun::Opt {
+        auto_route_opt = watfaq_tun::Opt {
             if_index: if_nametoindex(tun_name),
             preset: vec![],
             gateway_ipv4: Some(addr.parse().unwrap()),
@@ -226,11 +226,24 @@ async fn main_exec(opt: Opt) {
         };
     }
 
+    #[cfg(target_os = "windows")]
+    {
+        auto_route_opt = watfaq_tun::Opt {
+            if_index: if_nametoindex(tun_name),
+            preset: vec![],
+            luid: device.as_ref().luid(),
+            gateway_ipv4: Some(addr.parse().unwrap()),
+            gateway_ipv6: None,
+        };
+    }
+
+    // for linux, add ip rules, which will cooprate with the routes
     #[cfg(target_os = "linux")]
     watfaq_tun::platform::add_rules(table, true, true, true)
         .await
         .unwrap();
-    // watfaq_tun::add_route(&opt).await.unwrap();
+    // for all desktop platforms, add the routes, so that the tun device can be used
+    watfaq_tun::add_route(&auto_route_opt).await.unwrap();
 
     let (runner, udp_socket, tcp_listener, stack) = builder.build();
     tokio_spawn!(runner);
